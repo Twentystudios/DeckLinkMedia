@@ -84,6 +84,11 @@ public:
 			mData.resize( height * width * 4 );
 		}
 
+		virtual ~VideoFrameBGRA()
+		{
+			mData.clear();
+		}
+
 		uint8_t * data() const { return (uint8_t*)mData.data(); }
 
 		//override these methods for virtual

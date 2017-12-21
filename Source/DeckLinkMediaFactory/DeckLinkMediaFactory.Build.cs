@@ -4,8 +4,8 @@ namespace UnrealBuildTool.Rules
 {
 	public class DeckLinkMediaFactory : ModuleRules
 	{
-		public DeckLinkMediaFactory(TargetInfo Target)
-		{
+		public DeckLinkMediaFactory( ReadOnlyTargetRules Target ) : base(Target)
+        {
             DynamicallyLoadedModuleNames.AddRange(
                 new string[] {
                     "Media",

@@ -6,8 +6,8 @@ namespace UnrealBuildTool.Rules
 
     public class DeckLinkMedia : ModuleRules
 	{
-		public DeckLinkMedia(TargetInfo Target)
-		{
+		public DeckLinkMedia( ReadOnlyTargetRules Target ) : base(Target)
+        {
             DynamicallyLoadedModuleNames.AddRange(
 				new string[] {
 					"Media",
@@ -18,13 +18,14 @@ namespace UnrealBuildTool.Rules
 				new string[] {
 					"Core",
                     "CoreUObject",
+                    "MediaUtils",
                     "DeckLinkMediaFactory",
 					"RenderCore",
 					"RHI",
                     "Projects",
-                    "Engine",
-                    "Slate",
-                    "SlateCore",
+                    //"Engine",
+                    //"Slate",
+                    //"SlateCore",
                 }
 			);
 

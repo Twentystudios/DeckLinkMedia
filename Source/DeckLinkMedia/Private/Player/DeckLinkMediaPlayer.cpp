@@ -4,11 +4,13 @@
 #include "DeckLinkMediaPlayer.h"
 
 #include "HAL/FileManager.h"
+#include "IMediaEventSink.h"
 #include "IMediaOptions.h"
-#include "IMediaTextureSink.h"
-#include "IMediaBinarySink.h"
+#include "MediaSamples.h"
+#include "IMediaTextureSample.h"
 #include "Misc/ScopeLock.h"
 
+#include "DeckLinkMediaTextureSample.h"
 #include "DeckLink/DecklinkDevice.h"
 
 
@@ -18,9 +20,11 @@
 /* FDeckLinkMediaPlayer structors
  *****************************************************************************/
 
-FDeckLinkMediaPlayer::FDeckLinkMediaPlayer( const TMap<uint8, TUniquePtr<DeckLinkDevice>>* Devices )
-	: VideoSink( nullptr )
-	, BinarySink( nullptr )
+FDeckLinkMediaPlayer::FDeckLinkMediaPlayer( IMediaEventSink& InEventSink, const TMap<uint8, TUniquePtr<DeckLinkDevice>>* Devices )
+	: Samples( new FMediaSamples )
+	, CurrentState( EMediaState::Closed )
+	, CurrentTime( FTimespan::Zero() )
+	, EventSink( InEventSink )
 	, SelectedAudioTrack( INDEX_NONE )
 	, SelectedMetadataTrack( INDEX_NONE )
 	, SelectedVideoTrack( INDEX_NONE )
@@ -29,19 +33,39 @@ FDeckLinkMediaPlayer::FDeckLinkMediaPlayer( const TMap<uint8, TUniquePtr<DeckLin
 	, DeviceMap( Devices )
 	, CurrentDeviceIndex( 0 )
 	, Paused( false )
+	, UseFrameTimecode( false )
+	, VideoSampleFormat( EMediaTextureSampleFormat::CharBGRA )
 {
-	
+
 }
 
 
 FDeckLinkMediaPlayer::~FDeckLinkMediaPlayer()
 {
 	Close();
+
+	delete Samples;
+	Samples = nullptr;
 }
 
 
 /* IMediaControls interface
  *****************************************************************************/
+
+bool FDeckLinkMediaPlayer::CanControl( EMediaControl Control ) const
+{
+	if( Control == EMediaControl::Pause )
+	{
+		return ( CurrentState == EMediaState::Playing );
+	}
+
+	if( Control == EMediaControl::Resume )
+	{
+		return ( CurrentState == EMediaState::Paused );
+	}
+
+	return false;
+}
 
 FTimespan FDeckLinkMediaPlayer::GetDuration() const
 {
@@ -61,9 +85,21 @@ EMediaState FDeckLinkMediaPlayer::GetState() const
 }
 
 
-TRange<float> FDeckLinkMediaPlayer::GetSupportedRates(EMediaPlaybackDirections Direction, bool Unthinned) const
+
+EMediaStatus FDeckLinkMediaPlayer::GetStatus() const
 {
-	return TRange<float>( 1.0f );
+	return ( CurrentState == EMediaState::Preparing ) ? EMediaStatus::Connecting : EMediaStatus::None;
+}
+
+
+TRangeSet<float> FDeckLinkMediaPlayer::GetSupportedRates( EMediaRateThinning /*Thinning*/ ) const
+{
+	TRangeSet<float> Result;
+
+	Result.Add( TRange<float>( 0.0f ) );
+	Result.Add( TRange<float>( 1.0f ) );
+
+	return Result;
 }
 
 
@@ -79,19 +115,19 @@ bool FDeckLinkMediaPlayer::IsLooping() const
 }
 
 
-bool FDeckLinkMediaPlayer::Seek(const FTimespan& Time)
+bool FDeckLinkMediaPlayer::Seek( const FTimespan& Time )
 {
 	return false; // not supported
 }
 
 
-bool FDeckLinkMediaPlayer::SetLooping(bool Looping)
+bool FDeckLinkMediaPlayer::SetLooping( bool Looping )
 {
 	return false; // not supported
 }
 
 
-bool FDeckLinkMediaPlayer::SetRate(float Rate)
+bool FDeckLinkMediaPlayer::SetRate( float Rate )
 {
 	if( Rate == 0.0f )
 	{
@@ -107,24 +143,6 @@ bool FDeckLinkMediaPlayer::SetRate(float Rate)
 	}
 
 	return true;
-}
-
-
-bool FDeckLinkMediaPlayer::SupportsRate(float Rate, bool Unthinned) const
-{
-	return (Rate == 1.0f);
-}
-
-
-bool FDeckLinkMediaPlayer::SupportsScrubbing() const
-{
-	return false;
-}
-
-
-bool FDeckLinkMediaPlayer::SupportsSeeking() const
-{
-	return false;
 }
 
 
@@ -151,10 +169,14 @@ void FDeckLinkMediaPlayer::Close()
 		SelectedVideoTrack = INDEX_NONE;
 	}
 
-	MediaEvent.Broadcast(EMediaEvent::TracksChanged);
-	MediaEvent.Broadcast(EMediaEvent::MediaClosed);
+	EventSink.ReceiveMediaEvent( EMediaEvent::TracksChanged );
+	EventSink.ReceiveMediaEvent( EMediaEvent::MediaClosed );
 }
 
+IMediaCache& FDeckLinkMediaPlayer::GetCache()
+{
+	return *this;
+}
 
 IMediaControls& FDeckLinkMediaPlayer::GetControls()
 {
@@ -168,18 +190,16 @@ FString FDeckLinkMediaPlayer::GetInfo() const
 }
 
 
-FName FDeckLinkMediaPlayer::GetName() const
+FName FDeckLinkMediaPlayer::GetPlayerName() const
 {
 	static FName PlayerName(TEXT("DeckLinkMedia"));
 	return PlayerName;
 }
 
-
-IMediaOutput& FDeckLinkMediaPlayer::GetOutput()
+IMediaSamples& FDeckLinkMediaPlayer::GetSamples()
 {
-	return *this;
+	return *Samples;
 }
-
 
 FString FDeckLinkMediaPlayer::GetStats() const
 {
@@ -204,8 +224,13 @@ FString FDeckLinkMediaPlayer::GetUrl() const
 	return CurrentUrl;
 }
 
+IMediaView& FDeckLinkMediaPlayer::GetView()
+{
+	return *this;
+}
 
-bool FDeckLinkMediaPlayer::Open( const FString& Url, const IMediaOptions& Options )
+
+bool FDeckLinkMediaPlayer::Open( const FString& Url, const IMediaOptions*  Options )
 {
 	if( Url.IsEmpty() || !Url.StartsWith( TEXT( "sdi://" ) ) )
 	{
@@ -231,112 +256,51 @@ bool FDeckLinkMediaPlayer::Open( const FString& Url, const IMediaOptions& Option
 		FScopeLock Lock(&CriticalSection);
 		CurrentDim = Device->GetCurrentSize();
 		CurrentFps = Device->GetCurrentFps();
+		VideoSampleFormat = EMediaTextureSampleFormat::CharBGRA;
 		CurrentState = EMediaState::Stopped;
 		CurrentUrl = Url;
 	}
 
 	// notify listeners
-	MediaEvent.Broadcast(EMediaEvent::TracksChanged);
-	MediaEvent.Broadcast(EMediaEvent::MediaOpened);
+	EventSink.ReceiveMediaEvent( EMediaEvent::TracksChanged );
+	EventSink.ReceiveMediaEvent( EMediaEvent::MediaOpened );
 
 	return true;
 }
 
 
-bool FDeckLinkMediaPlayer::Open(const TSharedRef<FArchive, ESPMode::ThreadSafe>& Archive, const FString& OriginalUrl, const IMediaOptions& Options)
+bool FDeckLinkMediaPlayer::Open( const TSharedRef<FArchive, ESPMode::ThreadSafe>& /*Archive*/, const FString& /*OriginalUrl*/, const IMediaOptions* /*Options*/ )
 {
 	return false; // not supported
 }
 
 
-void FDeckLinkMediaPlayer::TickPlayer(float DeltaTime)
-{
-}
-
-
-void FDeckLinkMediaPlayer::TickVideo(float DeltaTime)
+void FDeckLinkMediaPlayer::TickFetch( FTimespan DeltaTime, FTimespan Timecode )
 {
 	QUICK_SCOPE_CYCLE_COUNTER( STAT_DeckLinkMediaPlayer_TickVideo );
 
-	if( Paused || ! VideoSink )
-		return;
-
-	DeckLinkDevice::VideoFrameBGRA frame;
-	auto newFrame = (*DeviceMap)[CurrentDeviceIndex]->GetFrame( &frame );
-	if( newFrame ) {
-		auto LastBufferDim = FIntPoint( frame.GetWidth(), frame.GetHeight() );
-		auto LastVideoDim = LastBufferDim;
-		FScopeLock Lock( &CriticalSection );
-		if( VideoSink->GetTextureSinkDimensions() != LastVideoDim ) {
-			if( !VideoSink->InitializeTextureSink( LastVideoDim, LastBufferDim, EMediaTextureSinkFormat::CharBGRA, EMediaTextureSinkMode::Unbuffered ) ) {
-				return;
-			}
+	if( ( CurrentState == EMediaState::Playing ) && ( SelectedVideoTrack == 0 ) )
+	{
+		auto TextureSample = MakeShared<FDeckLinkMediaTextureSample, ESPMode::ThreadSafe>( VideoSampleFormat, CurrentTime, FTimespan::FromSeconds(  1.0f / CurrentFps ) );
+		auto newFrame = ( *DeviceMap )[CurrentDeviceIndex]->GetFrame( &TextureSample->Frame );
+		if( newFrame ) {
+			Samples->AddVideo( TextureSample );
 		}
-		VideoSink->UpdateTextureSinkBuffer( frame.data(), frame.GetRowBytes() );
-		VideoSink->DisplayTextureSinkBuffer( FTimespan{} );
 	}
 
+	//TODO: Handle timecode
 	CurrentTime += DeltaTime;
 }
 
 
-/* IMediaOutput interface
- *****************************************************************************/
-
-void FDeckLinkMediaPlayer::SetAudioSink(IMediaAudioSink* Sink)
+void FDeckLinkMediaPlayer::TickInput( FTimespan DeltaTime, FTimespan Timecode )
 {
-	// not supported
-}
+	const EMediaState State = Paused ? EMediaState::Paused : EMediaState::Playing;
 
-
-void FDeckLinkMediaPlayer::SetMetadataSink(IMediaBinarySink* Sink)
-{
-	if( Sink == BinarySink )
+	if( State != CurrentState )
 	{
-		return;
-	}
-
-	FScopeLock Lock( &CriticalSection );
-
-	if( BinarySink != nullptr )
-	{
-		BinarySink->ShutdownBinarySink();
-	}
-
-	BinarySink = Sink;
-
-	if( Sink != nullptr )
-	{
-		Sink->InitializeBinarySink();
-	}
-}
-
-
-void FDeckLinkMediaPlayer::SetOverlaySink(IMediaOverlaySink* Sink)
-{
-	// not supported
-}
-
-
-void FDeckLinkMediaPlayer::SetVideoSink(IMediaTextureSink* Sink)
-{
-	if (Sink == VideoSink)
-	{
-		return;
-	}
-
-	FScopeLock Lock(&CriticalSection);
-
-	if (VideoSink != nullptr)
-	{
-		VideoSink->ShutdownTextureSink();
-	}
-
-	VideoSink = Sink;
-
-	if (Sink != nullptr)
-	{
-		Sink->InitializeTextureSink(CurrentDim, CurrentDim, EMediaTextureSinkFormat::CharBGRA, EMediaTextureSinkMode::Unbuffered);
+		CurrentState = State;
+		EventSink.ReceiveMediaEvent( State == EMediaState::Playing ? EMediaEvent::PlaybackResumed : EMediaEvent::PlaybackSuspended );
 	}
 }
 
@@ -344,17 +308,10 @@ void FDeckLinkMediaPlayer::SetVideoSink(IMediaTextureSink* Sink)
 /* IMediaTracks interface
  *****************************************************************************/
 
-uint32 FDeckLinkMediaPlayer::GetAudioTrackChannels(int32 TrackIndex) const
+bool FDeckLinkMediaPlayer::GetAudioTrackFormat( int32 TrackIndex, int32 FormatIndex, FMediaAudioTrackFormat& OutFormat ) const
 {
 	return 0; // not supported
 }
-
-
-uint32 FDeckLinkMediaPlayer::GetAudioTrackSampleRate(int32 TrackIndex) const
-{
-	return 0; // not supported
-}
-
 
 int32 FDeckLinkMediaPlayer::GetNumTracks(EMediaTrackType TrackType) const
 {
@@ -369,6 +326,12 @@ int32 FDeckLinkMediaPlayer::GetNumTracks(EMediaTrackType TrackType) const
 	return 0;
 }
 
+int32 FDeckLinkMediaPlayer::GetNumTrackFormats( EMediaTrackType TrackType, int32 TrackIndex ) const
+{
+	return ( ( TrackIndex == 0 ) && ( GetNumTracks( TrackType ) > 0 ) ) ? 1 : 0;
+}
+
+
 
 int32 FDeckLinkMediaPlayer::GetSelectedTrack(EMediaTrackType TrackType) const
 {
@@ -381,9 +344,9 @@ int32 FDeckLinkMediaPlayer::GetSelectedTrack(EMediaTrackType TrackType) const
 	{
 	case EMediaTrackType::Audio:
 	case EMediaTrackType::Metadata:
-	case EMediaTrackType::Video:
 		return 0;
-
+	case EMediaTrackType::Video:
+		return SelectedVideoTrack;
 	default:
 		return INDEX_NONE;
 	}
@@ -413,15 +376,13 @@ FText FDeckLinkMediaPlayer::GetTrackDisplayName(EMediaTrackType TrackType, int32
 	}
 }
 
+int32 FDeckLinkMediaPlayer::GetTrackFormat( EMediaTrackType TrackType, int32 TrackIndex ) const
+{
+	return ( GetSelectedTrack( TrackType ) != INDEX_NONE ) ? 0 : INDEX_NONE;
+}
 
 FString FDeckLinkMediaPlayer::GetTrackLanguage(EMediaTrackType TrackType, int32 TrackIndex) const
 {
-	// @todo fixme
-	if ((true) || (TrackIndex != 0))
-	{
-		return FString();
-	}
-
 	return TEXT("und");
 }
 
@@ -431,34 +392,19 @@ FString FDeckLinkMediaPlayer::GetTrackName(EMediaTrackType TrackType, int32 Trac
 	return FString();
 }
 
-
-uint32 FDeckLinkMediaPlayer::GetVideoTrackBitRate(int32 TrackIndex) const
+bool FDeckLinkMediaPlayer::GetVideoTrackFormat( int32 TrackIndex, int32 FormatIndex, FMediaVideoTrackFormat& OutFormat ) const
 {
-	return 0; // @todo fixme
-}
-
-
-FIntPoint FDeckLinkMediaPlayer::GetVideoTrackDimensions(int32 TrackIndex) const
-{
-	// @todo fixme
-	if ((true) || (TrackIndex != 0))
+	if( ( TrackIndex != 0 ) || ( FormatIndex != 0 ) )
 	{
-		return FIntPoint::ZeroValue;
+		return false;
 	}
 
-	return CurrentDim;
-}
+	OutFormat.Dim = CurrentDim;
+	OutFormat.FrameRate = CurrentFps;
+	OutFormat.FrameRates = TRange<float>( CurrentFps );
+	OutFormat.TypeName = ( VideoSampleFormat == EMediaTextureSampleFormat::CharBGRA ) ? TEXT( "UYVY" ) : TEXT( "RGBA" );
 
-
-float FDeckLinkMediaPlayer::GetVideoTrackFrameRate(int32 TrackIndex) const
-{
-	// @todo fixme
-	if ((true) || (TrackIndex != 0))
-	{
-		return 0;
-	}
-
-	return CurrentFps;
+	return true;
 }
 
 
@@ -479,6 +425,16 @@ bool FDeckLinkMediaPlayer::SelectTrack(EMediaTrackType TrackType, int32 TrackInd
 	}
 
 	return true;
+}
+
+bool FDeckLinkMediaPlayer::SetTrackFormat( EMediaTrackType TrackType, int32 TrackIndex, int32 FormatIndex )
+{
+	if( ( TrackIndex != 0 ) || ( FormatIndex != 0 ) )
+	{
+		return false;
+	}
+
+	return ( TrackType == EMediaTrackType::Video );
 }
 
 #undef LOCTEXT_NAMESPACE

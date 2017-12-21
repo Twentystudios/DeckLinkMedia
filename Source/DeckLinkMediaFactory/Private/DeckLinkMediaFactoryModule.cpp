@@ -42,7 +42,7 @@ public:
 
 	//~ IMediaPlayerInfo interface
 
-	virtual bool CanPlayUrl(const FString& Url, const IMediaOptions& Options, TArray<FText>* OutWarnings, TArray<FText>* OutErrors) const override
+	virtual bool CanPlayUrl(const FString& Url, const IMediaOptions* /*Options*/, TArray<FText>* /*OutWarnings*/, TArray<FText>* OutErrors) const override
 	{
 		FString Scheme;
 		FString Location;
@@ -71,10 +71,10 @@ public:
 		return true;
 	}
 
-	virtual TSharedPtr<IMediaPlayer> CreatePlayer() override
+	virtual TSharedPtr<IMediaPlayer, ESPMode::ThreadSafe> CreatePlayer( IMediaEventSink& EventSink ) override
 	{
 		auto DeckLinkMediaModule = FModuleManager::LoadModulePtr<IDeckLinkMediaModule>("DeckLinkMedia");
-		return (DeckLinkMediaModule != nullptr) ? DeckLinkMediaModule->CreatePlayer() : nullptr;
+		return (DeckLinkMediaModule != nullptr) ? DeckLinkMediaModule->CreatePlayer( EventSink ) : nullptr;
 	}
 
 	virtual FText GetDisplayName() const override
@@ -82,7 +82,7 @@ public:
 		return LOCTEXT("MediaPlayerDisplayName", "DeckLink Media Player");
 	}
 
-	virtual FName GetName() const override
+	virtual FName GetPlayerName() const override
 	{
 		static FName PlayerName(TEXT("DeckLinkMedia"));
 		return PlayerName;
@@ -91,6 +91,14 @@ public:
 	virtual const TArray<FString>& GetSupportedPlatforms() const override
 	{
 		return SupportedPlatforms;
+	}
+
+	virtual bool SupportsFeature( EMediaFeature Feature ) const override
+	{
+		return ( ( Feature == EMediaFeature::MetadataTracks ) ||
+			( Feature == EMediaFeature::VideoSamples ) ||
+			( Feature == EMediaFeature::VideoTracks ) );
+
 	}
 
 public:

@@ -4,8 +4,8 @@ namespace UnrealBuildTool.Rules
 {
 	public class DeckLinkMediaEditor : ModuleRules
 	{
-		public DeckLinkMediaEditor(TargetInfo Target)
-		{
+		public DeckLinkMediaEditor( ReadOnlyTargetRules Target ) : base(Target)
+        {
 			PrivateDependencyModuleNames.AddRange(
 				new string[] {
 					"Core",

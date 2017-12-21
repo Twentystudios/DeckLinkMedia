@@ -3,26 +3,31 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "IMediaCache.h"
 #include "IMediaControls.h"
 #include "IMediaPlayer.h"
-#include "IMediaOutput.h"
 #include "IMediaTracks.h"
+#include "IMediaView.h"
 
+class FMediaSamples;
 class DeckLinkDevice;
+class IMediaEventSink;
+enum class EMediaTextureSampleFormat;
 
 /**
  * Implements a media player EXR image sequences.
  */
 class FDeckLinkMediaPlayer
-	: public IMediaControls
-	, public IMediaPlayer
-	, public IMediaOutput
-	, public IMediaTracks
+	: public IMediaPlayer
+	, protected IMediaCache
+	, protected IMediaControls
+	, protected IMediaTracks
+	, protected IMediaView
 {
 public:
 
 	/** Default constructor. */
-	FDeckLinkMediaPlayer( const TMap<uint8, TUniquePtr<DeckLinkDevice>>* Devices );
+	FDeckLinkMediaPlayer( IMediaEventSink& InEventSink, const TMap<uint8, TUniquePtr<DeckLinkDevice>>* Devices );
 
 	/** Destructor. */
 	~FDeckLinkMediaPlayer();
@@ -30,73 +35,53 @@ public:
 public:
 	//~ IMediaControls interface
 
+	virtual bool CanControl( EMediaControl Control ) const override;
 	virtual FTimespan GetDuration() const override;
 	virtual float GetRate() const override;
 	virtual EMediaState GetState() const override;
-	virtual TRange<float> GetSupportedRates(EMediaPlaybackDirections Direction, bool Unthinned) const override;
+	virtual EMediaStatus GetStatus() const override;
+	virtual TRangeSet<float> GetSupportedRates( EMediaRateThinning Thinning ) const override;
 	virtual FTimespan GetTime() const override;
 	virtual bool IsLooping() const override;
-	virtual bool Seek(const FTimespan& Time) override;
-	virtual bool SetLooping(bool Looping) override;
-	virtual bool SetRate(float Rate) override;
-	virtual bool SupportsRate(float Rate, bool Unthinned) const override;
-	virtual bool SupportsScrubbing() const override;
-	virtual bool SupportsSeeking() const override;
+	virtual bool Seek( const FTimespan& Time ) override;
+	virtual bool SetLooping( bool Looping ) override;
+	virtual bool SetRate( float Rate ) override;
 
 public:
 
 	//~ IMediaPlayer interface
 
 	virtual void Close() override;
+	virtual IMediaCache& GetCache() override;
 	virtual IMediaControls& GetControls() override;
 	virtual FString GetInfo() const override;
-	virtual FName GetName() const override;
-	virtual IMediaOutput& GetOutput() override;
+	virtual FName GetPlayerName() const override;
+	virtual IMediaSamples& GetSamples() override;
 	virtual FString GetStats() const override;
 	virtual IMediaTracks& GetTracks() override;
 	virtual FString GetUrl() const override;
-	virtual bool Open(const FString& Url, const IMediaOptions& Options) override;
-	virtual bool Open(const TSharedRef<FArchive, ESPMode::ThreadSafe>& Archive, const FString& OriginalUrl, const IMediaOptions& Options) override;
-	virtual void TickPlayer(float DeltaTime) override;
-	virtual void TickVideo(float DeltaTime) override;
-
-	DECLARE_DERIVED_EVENT( FMfMediaPlayer, IMediaPlayer::FOnMediaEvent, FOnMediaEvent);
-	virtual FOnMediaEvent& OnMediaEvent() override
-	{
-		return MediaEvent;
-	}
-
-public:
-
-	//~ IMediaOutput interface
-
-	virtual void SetAudioSink(IMediaAudioSink* Sink) override;
-	virtual void SetMetadataSink(IMediaBinarySink* Sink) override;
-	virtual void SetOverlaySink(IMediaOverlaySink* Sink) override;
-	virtual void SetVideoSink(IMediaTextureSink* Sink) override;
+	virtual IMediaView& GetView() override;
+	virtual bool Open(const FString& Url, const IMediaOptions* Options) override;
+	virtual bool Open( const TSharedRef<FArchive, ESPMode::ThreadSafe>& Archive, const FString& OriginalUrl, const IMediaOptions* Options ) override;
+	virtual void TickFetch( FTimespan DeltaTime, FTimespan Timecode ) override;
+	virtual void TickInput( FTimespan DeltaTime, FTimespan Timecode ) override;
 
 public:
 
 	//~ IMediaTracks interface
 
-	virtual uint32 GetAudioTrackChannels(int32 TrackIndex) const override;
-	virtual uint32 GetAudioTrackSampleRate(int32 TrackIndex) const override;
-	virtual int32 GetNumTracks(EMediaTrackType TrackType) const override;
-	virtual int32 GetSelectedTrack(EMediaTrackType TrackType) const override;
-	virtual FText GetTrackDisplayName(EMediaTrackType TrackType, int32 TrackIndex) const override;
-	virtual FString GetTrackLanguage(EMediaTrackType TrackType, int32 TrackIndex) const override;
-	virtual FString GetTrackName(EMediaTrackType TrackType, int32 TrackIndex) const override;
-	virtual uint32 GetVideoTrackBitRate(int32 TrackIndex) const override;
-	virtual FIntPoint GetVideoTrackDimensions(int32 TrackIndex) const override;
-	virtual float GetVideoTrackFrameRate(int32 TrackIndex) const override;
-	virtual bool SelectTrack(EMediaTrackType TrackType, int32 TrackIndex) override;
+	virtual bool GetAudioTrackFormat( int32 TrackIndex, int32 FormatIndex, FMediaAudioTrackFormat& OutFormat ) const override;
+	virtual int32 GetNumTracks( EMediaTrackType TrackType ) const override;
+	virtual int32 GetNumTrackFormats( EMediaTrackType TrackType, int32 TrackIndex ) const override;
+	virtual int32 GetSelectedTrack( EMediaTrackType TrackType ) const override;
+	virtual FText GetTrackDisplayName( EMediaTrackType TrackType, int32 TrackIndex ) const override;
+	virtual int32 GetTrackFormat( EMediaTrackType TrackType, int32 TrackIndex ) const override;
+	virtual FString GetTrackLanguage( EMediaTrackType TrackType, int32 TrackIndex ) const override;
+	virtual FString GetTrackName( EMediaTrackType TrackType, int32 TrackIndex ) const override;
+	virtual bool GetVideoTrackFormat( int32 TrackIndex, int32 FormatIndex, FMediaVideoTrackFormat& OutFormat ) const override;
+	virtual bool SelectTrack( EMediaTrackType TrackType, int32 TrackIndex ) override;
+	virtual bool SetTrackFormat( EMediaTrackType TrackType, int32 TrackIndex, int32 FormatIndex ) override;
 
-private:
-
-	/** The currently used video sink. */
-	IMediaBinarySink* BinarySink;
-
-	IMediaTextureSink* VideoSink;
 private:
 
 	/** Index of the selected audio track. */
@@ -119,9 +104,6 @@ private:
 	/** Frames per second of the currently opened sequence. */
 	float CurrentFps;
 
-	/** The current playback rate. */
-	float CurrentRate;
-
 	/** Current state of the media player. */
 	EMediaState CurrentState;
 
@@ -130,6 +112,9 @@ private:
 
 	/** The URL of the currently opened media. */
 	FString CurrentUrl;
+
+	/** The media event handler. */
+	IMediaEventSink& EventSink;
 
 	/** The duration of the media. */
     FTimespan Duration;
@@ -140,11 +125,14 @@ private:
 	/** Whether the player is paused. */
 	bool Paused;
 
-	/** Holds an event delegate that is invoked when a media event occurred. */
-	FOnMediaEvent MediaEvent;
-	
-	/** Media playback state. */
-	EMediaState State;
+	/** Whether to use the time code embedded in NDI frames. */
+	bool UseFrameTimecode;
+
+	/** The media sample cache. */
+	FMediaSamples* Samples;
+
+	/** The current video sample format. */
+	EMediaTextureSampleFormat VideoSampleFormat;
 
 	const TMap<uint8, TUniquePtr<DeckLinkDevice>> *			DeviceMap;
 	int32													CurrentDeviceIndex;

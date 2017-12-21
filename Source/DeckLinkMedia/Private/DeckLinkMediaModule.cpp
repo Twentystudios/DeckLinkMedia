@@ -24,16 +24,20 @@ class FDeckLinkMediaModule
 {
 public:
 	/** Default constructor. */
-	FDeckLinkMediaModule() { }
+	FDeckLinkMediaModule()
+	: Initialized( false ) { }
 
 	virtual void StartupModule() override;
 	virtual void ShutdownModule() override;
 
 	void DeviceArrived( IDeckLink* decklink, size_t id );
-	virtual TSharedPtr<IMediaPlayer> CreatePlayer() override;
+	virtual TSharedPtr<IMediaPlayer, ESPMode::ThreadSafe> CreatePlayer( IMediaEventSink& EventSink ) override;
 private:
 	TSharedPtr<DeckLinkDeviceDiscovery> DeviceDiscovery;
 	TMap<uint8, TUniquePtr<DeckLinkDevice>> DeviceMap;
+
+	/** Whether the module has been initialized. */
+	bool Initialized;
 };
 
 IMPLEMENT_MODULE(FDeckLinkMediaModule, DeckLinkMedia);
@@ -44,10 +48,19 @@ void FDeckLinkMediaModule::StartupModule()
 	auto DeviceCallback = std::bind( &FDeckLinkMediaModule::DeviceArrived, this, _1, _2 );
 	DeviceDiscovery.Reset();
 	DeviceDiscovery = MakeShareable( new DeckLinkDeviceDiscovery( DeviceCallback ) );
+
+	Initialized = true;
 }
 
 void FDeckLinkMediaModule::ShutdownModule()
 {
+	if( ! Initialized )
+	{
+		return;
+	}
+
+	Initialized = false;
+
 	DeviceMap.Empty();
 	DeviceDiscovery.Reset();
 }
@@ -63,9 +76,14 @@ void FDeckLinkMediaModule::DeviceArrived( IDeckLink* decklink, size_t id )
 	} );
 }
 
-TSharedPtr<IMediaPlayer> FDeckLinkMediaModule::CreatePlayer()
+TSharedPtr<IMediaPlayer, ESPMode::ThreadSafe> FDeckLinkMediaModule::CreatePlayer( IMediaEventSink& EventSink )
 {
-	return MakeShared<FDeckLinkMediaPlayer>( &DeviceMap );
+	if( ! Initialized )
+	{
+		return nullptr;
+	}
+
+	return MakeShared<FDeckLinkMediaPlayer, ESPMode::ThreadSafe>( EventSink, &DeviceMap );
 }
 
 

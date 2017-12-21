@@ -7,6 +7,7 @@
 #include "Modules/ModuleInterface.h"
 #include "Modules/ModuleManager.h"
 
+class IMediaEventSink;
 class IMediaPlayer;
 
 /**
@@ -32,7 +33,7 @@ public:
 	 *
 	 * @return A new media player, or nullptr if a player couldn't be created.
 	 */
-	virtual TSharedPtr<IMediaPlayer> CreatePlayer() = 0;
+	virtual TSharedPtr<IMediaPlayer, ESPMode::ThreadSafe> CreatePlayer( IMediaEventSink& EventSink ) = 0;
 public:
 
 	/** Virtual destructor. */

@@ -3,10 +3,9 @@
 #pragma once
 
 #include "CoreMinimal.h"
-#include "MediaSource.h"
 #include "UObject/Object.h"
 #include "UObject/ObjectMacros.h"
-#include "UObject/ScriptMacros.h"
+#include "BaseMediaSource.h"
 
 #include "DeckLinkMediaSource.generated.h"
 
@@ -14,9 +13,9 @@
 /**
  * Media source for EXR image sequences.
  */
-UCLASS(BlueprintType, hidecategories=(Overrides, Playback))
+UCLASS(BlueprintType)
 class DECKLINKMEDIA_API UDeckLinkMediaSource
-	: public UMediaSource
+	: public UBaseMediaSource
 {
 	GENERATED_BODY()
 

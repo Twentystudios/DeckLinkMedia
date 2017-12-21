@@ -9,13 +9,13 @@ This plug-in makes SDI media input streams available in Unreal Engine 4.
 
 ## Supported Platforms & Drivers
 
-This plug-in was last tested against **Unreal Engine 4.16** on Windows only.
+This plug-in was last tested against **Unreal Engine 4.18** on Windows only.
 
 
 ## Prerequisites
 
 This plugin relies on blackmagic drivers, installed
-with Desktop Video version 10.8.5 found [here.](https://www.blackmagicdesign.com/support)
+with Desktop Video version 10.9.5 found [here.](https://www.blackmagicdesign.com/support)
 
 
 ## Usage
