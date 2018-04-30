@@ -1,0 +1,9 @@
+{
+	"BuildId": "3944462",
+	"Modules": 
+	{
+		"DeckLinkMedia": "UE4Editor-DeckLinkMedia.dll",
+		"DeckLinkMediaEditor": "UE4Editor-DeckLinkMediaEditor.dll",
+		"DeckLinkMediaFactory": "UE4Editor-DeckLinkMediaFactory.dll"
+	}
+}
